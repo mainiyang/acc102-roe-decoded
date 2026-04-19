@@ -28,11 +28,17 @@ plt.rcParams['axes.unicode_minus'] = False
 # ==========================================================================
 # WRDS connection management
 # ==========================================================================
-# WRDS PostgreSQL server details (same as what the wrds library uses internally).
-# Source: wrds library source code (Connection class).
 WRDS_HOST = 'wrds-pgdata.wharton.upenn.edu'
 WRDS_PORT = 9737
 WRDS_DB = 'wrds'
+
+# Connection timeout must be long enough for:
+#  (1) PAM to call Duo API
+#  (2) Duo to push notification to the user's phone
+#  (3) User to unlock phone and tap Approve
+#  (4) Duo to notify PAM, PAM to finalize authentication
+# A realistic end-to-end time is 30-90 seconds. We allow 120s to be safe.
+WRDS_CONNECT_TIMEOUT = 120
 
 
 def connect_wrds(username, password):
@@ -45,7 +51,6 @@ def connect_wrds(username, password):
     Returns (engine, error_message). error_message is None on success.
     """
     try:
-        # Escape any special chars in the password (colons, @, etc.)
         from urllib.parse import quote_plus
         user_esc = quote_plus(username)
         pass_esc = quote_plus(password)
@@ -55,9 +60,19 @@ def connect_wrds(username, password):
             f'@{WRDS_HOST}:{WRDS_PORT}/{WRDS_DB}'
             f'?sslmode=require'
         )
-        engine = sqlalchemy.create_engine(url, connect_args={'connect_timeout': 10})
+        engine = sqlalchemy.create_engine(
+            url,
+            connect_args={
+                'connect_timeout': WRDS_CONNECT_TIMEOUT,
+                # Keep the socket alive while waiting for Duo approval
+                'keepalives': 1,
+                'keepalives_idle': 30,
+                'keepalives_interval': 10,
+                'keepalives_count': 5,
+            }
+        )
 
-        # Quick probe to verify the credentials actually work
+        # Quick probe to verify credentials (this is what triggers the Duo push)
         with engine.connect() as conn:
             conn.execute(sqlalchemy.text('SELECT 1'))
 
@@ -110,11 +125,9 @@ def clean_and_compute(data):
         'lct': 'current_liabilities'
     })
 
-    # Exclude negative equity rows and track what was excluded
     excluded = data[data['equity'] <= 0][['ticker', 'year', 'equity']].copy()
     data = data[data['equity'] > 0].copy()
 
-    # Compute ratios
     data['roe'] = data['net_income'] / data['equity']
     data['profit_margin'] = data['net_income'] / data['revenue']
     data['asset_turnover'] = data['revenue'] / data['total_assets']
@@ -300,6 +313,15 @@ if st.session_state.engine is None:
         'Please enter your own WRDS credentials. '
         'Your password is used only for this session and is never stored.'
     )
+    st.warning(
+        '**📱 Heads up — WRDS requires Duo Push for database connections.**  \n'
+        '1. Have your phone ready with the Duo Mobile app open  \n'
+        '2. After clicking **Log in**, wait for a Duo push notification (may take 10–30 seconds)  \n'
+        '3. Tap **Approve** on your phone  \n'
+        '4. The app will automatically continue once approved  \n'
+        'If you don\'t receive a push within 60 seconds, it may mean your account uses a '
+        'different MFA method — please contact WRDS support.'
+    )
 
     with st.form('login_form'):
         wrds_user = st.text_input('WRDS username')
@@ -310,10 +332,15 @@ if st.session_state.engine is None:
         if not wrds_user or not wrds_pass:
             st.error('Please enter both username and password.')
         else:
-            with st.spinner('Connecting to WRDS...'):
+            with st.spinner('Connecting to WRDS... Please check your phone for a Duo push and tap Approve.'):
                 engine, err = connect_wrds(wrds_user, wrds_pass)
             if err:
                 st.error(f'Login failed: {err}')
+                st.caption(
+                    'Common causes: (1) Duo push timed out — try again and approve faster; '
+                    '(2) your account does not have Duo Push enabled for PostgreSQL connections; '
+                    '(3) wrong password.'
+                )
             else:
                 st.session_state.engine = engine
                 st.success('Connected. Redirecting...')
