@@ -6,25 +6,42 @@
 
 ## 📌 Product Demo
 
-- **Live app**: _[link will be added after deployment to Streamlit Community Cloud]_
+- **Live app**: https://acc102-roe-decoded-5ieqygutyahcimlpjrq8fh.streamlit.app/
 - **Demo video**: _[link will be added after recording]_
-- **GitHub repository**: _[link will be added]_
+- **GitHub repository**: https://github.com/mainiyang/acc102-roe-decoded
 
-### How the live app works
+---
 
-1. Open the app link in a browser
-2. Enter your own WRDS credentials in the login form
-3. Type 2–4 ticker symbols (e.g., `AAPL, MSFT, GOOGL`)
-4. Pick a fiscal year range
-5. Click **Analyze** — the app queries WRDS in real time and renders a DuPont decomposition
+## 🎯 For the Grader — How to Use the Live App
 
-### ⚠️ Important: WRDS account and MFA
+The app is deployed publicly. To evaluate it live, please follow these steps:
 
-This app queries WRDS live, so **a valid WRDS account is required**. If your institution enforces Duo MFA (multi-factor authentication) on WRDS database connections, login through this app may fail with a `PAM authentication failed` error. In that case:
+### Prerequisites
 
-- Try again — MFA tokens can be picky about timing
-- If it keeps failing, the repository can be cloned and run locally (see Section 5), which uses the same WRDS account but typically does not hit the MFA gate
-- Or contact WRDS support to confirm whether your account allows PostgreSQL direct connections
+1. **A WRDS account** — the app queries Compustat in real time
+2. **Duo Mobile app installed on your phone** — WRDS requires Duo Push for PostgreSQL database connections
+3. **Your phone nearby** with a stable internet connection
+
+### Step-by-step
+
+1. **Open the app link** above in any modern browser
+2. **Enter your WRDS credentials** in the login form and click **Log in**
+3. **Check your phone immediately** — a Duo Push notification will arrive within 5-20 seconds
+4. **Approve the push** on your phone within ~60 seconds (otherwise the connection times out)
+5. Once approved, the app transitions to the main analysis screen
+6. **Enter 2–4 U.S. ticker symbols** (e.g., `WMT, COST, TGT` or `AAPL, MSFT, GOOGL`) in the sidebar
+7. **Adjust the fiscal year range** if you want (default is 2018–2024)
+8. Click **Analyze**. The app will query WRDS (10–30 seconds) and render:
+   - Three-factor DuPont comparison (bar charts)
+   - Business model "fingerprints" (radar charts)
+   - Auto-generated English commentary
+   - Raw data table (expandable)
+
+### Troubleshooting
+
+- **"PAM authentication failed"**: Your Duo Push request wasn't approved in time, or your account doesn't have Duo Push enabled. Retry with your phone ready. Note that SMS-based MFA is *not* supported for WRDS PostgreSQL connections — only Duo Push works.
+- **"No data returned"**: Double-check the ticker symbols are valid Compustat tickers and that data exists in the chosen year range.
+- **Want to skip the live login?** Clone the GitHub repo and run locally — see Section 5 below.
 
 ---
 
@@ -108,7 +125,7 @@ Home Depot had negative equity in 2018/2019/2021 — not because of operational 
 
 ```bash
 # Clone the repo
-git clone <repo URL>
+git clone https://github.com/mainiyang/acc102-roe-decoded
 cd acc102-roe-decoded
 
 # Install dependencies
@@ -139,6 +156,7 @@ The browser will open `http://localhost:8501`. Enter your own WRDS credentials i
 acc102-roe-decoded/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
+├── runtime.txt                  # Pins Python 3.11 for deployment
 ├── .gitignore                   # Excludes WRDS data and system files
 │
 ├── notebook.ipynb               # Core analytical narrative (primary deliverable)
@@ -153,15 +171,23 @@ acc102-roe-decoded/
 
 ## 7. Architecture Notes
 
-### Why does the app connect to WRDS directly (not via the `wrds` Python library)?
+### Why connect to WRDS directly (not via the `wrds` Python library)?
 
-The official `wrds` library assumes interactive use in a Jupyter notebook and falls back to a terminal prompt when a password cannot be resolved from `~/.pgpass`. This breaks in a Streamlit web-app context. The app instead uses `sqlalchemy + psycopg2` to connect directly to the same PostgreSQL backend that the `wrds` library uses (`wrds-pgdata.wharton.upenn.edu:9737`), with credentials supplied by the user via the login form.
+The official `wrds` library assumes interactive use in a Jupyter notebook and falls back to a terminal prompt when a password cannot be resolved from `~/.pgpass`. This breaks in a Streamlit web-app context — there's no terminal for the library to prompt into.
 
-This is equivalent to what the `wrds` library does internally, just without the interactive prompt fallback.
+The app instead uses `sqlalchemy + psycopg2` to connect directly to the same PostgreSQL backend that the `wrds` library uses (`wrds-pgdata.wharton.upenn.edu:9737`), with credentials supplied by the user via the web login form. This is equivalent to what the `wrds` library does internally, just without the interactive prompt fallback.
+
+### How does the app handle WRDS's Duo MFA?
+
+WRDS requires Duo Push for all PostgreSQL connections. When the user clicks "Log in" with valid credentials, WRDS automatically sends a push notification to the user's registered Duo Mobile device. The PostgreSQL connection waits for the user to approve the push, then completes. This is the **intended** MFA flow for automated WRDS access — the app does not try to bypass it.
 
 ### Caching
 
-Query results are cached for 1 hour using `st.cache_data`. Repeated queries with the same ticker set and year range return instantly without re-hitting WRDS.
+Query results are cached for 1 hour using `st.cache_data`. Repeated queries with the same ticker set and year range return instantly without re-hitting WRDS, which is useful when the grader wants to adjust the year-range slider and see different averages without re-authenticating.
+
+### Deployment notes
+
+The app is deployed to **Streamlit Community Cloud** with Python 3.11 (pinned in both `runtime.txt` and via the "Advanced settings" dialog during app creation, because Streamlit Cloud currently ignores `runtime.txt` alone). `psycopg2-binary` requires Python 3.11 — newer Python versions (3.13+) lack pre-built wheels and fail to compile in the Cloud's build environment.
 
 ---
 
@@ -175,10 +201,11 @@ Query results are cached for 1 hour using `st.cache_data`. Repeated queries with
 **Tool**:
 - The rule-based insight generator has limited coverage; extreme cases (persistent losses, negative equity) fall back to generic text rather than deep analysis
 - No industry-median benchmark — a future version could add peer-distribution context
-- MFA-protected WRDS accounts may have trouble authenticating through the direct PostgreSQL connection; this is a WRDS-side limitation, not an app issue
+- Every user must have their own WRDS account with Duo Push enabled, which creates a friction point for any user who has not previously used WRDS programmatically
 
 **Engineering**:
 - No unit tests — acceptable for a small assignment, but would be needed at larger scale
+- Each deployed session holds an open PostgreSQL connection until the user logs out or the session expires; at higher user volumes a connection pool with cleanup would be needed
 
 ---
 
