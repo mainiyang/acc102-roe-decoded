@@ -1,7 +1,9 @@
 """
-The Story Behind ROE · DuPont Decomposition Tool
+The Story Behind ROE · DuPont Decomposition Tool (Live WRDS version)
 
-Streamlit interactive entry point.
+This version lets the user log in with their own WRDS credentials
+and query any U.S.-listed companies in real time.
+
 Usage: streamlit run app.py
 """
 
@@ -9,6 +11,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import sqlalchemy
 
 # ==========================================================================
 # Page config
@@ -19,35 +22,82 @@ st.set_page_config(
     layout='wide'
 )
 
-# matplotlib: avoid unicode-minus display issues
 plt.rcParams['axes.unicode_minus'] = False
 
-# ==========================================================================
-# Company pool (kept consistent with the notebook)
-# ==========================================================================
-COMPANY_POOL = {
-    'WMT':   'Walmart',
-    'COST':  'Costco',
-    'TGT':   'Target',
-    'HD':    'Home Depot',
-    'AAPL':  'Apple',
-    'MSFT':  'Microsoft',
-    'GOOGL': 'Alphabet (Google)',
-    'KO':    'Coca-Cola',
-    'PEP':   'PepsiCo',
-    'NKE':   'Nike',
-}
-
 
 # ==========================================================================
-# Data loading and processing
+# WRDS connection management
 # ==========================================================================
-@st.cache_data
-def load_data():
-    """Load the cached WRDS data and run the cleaning steps."""
-    data = pd.read_csv('company_financials.csv')
+# WRDS PostgreSQL server details (same as what the wrds library uses internally).
+# Source: wrds library source code (Connection class).
+WRDS_HOST = 'wrds-pgdata.wharton.upenn.edu'
+WRDS_PORT = 9737
+WRDS_DB = 'wrds'
 
-    # Rename columns (consistent with the notebook)
+
+def connect_wrds(username, password):
+    """Try to connect to the WRDS PostgreSQL database directly via SQLAlchemy.
+
+    We bypass the wrds library's Connection class because it does not accept
+    a password argument and will fall back to interactive prompts in a web
+    app context.
+
+    Returns (engine, error_message). error_message is None on success.
+    """
+    try:
+        # Escape any special chars in the password (colons, @, etc.)
+        from urllib.parse import quote_plus
+        user_esc = quote_plus(username)
+        pass_esc = quote_plus(password)
+
+        url = (
+            f'postgresql+psycopg2://{user_esc}:{pass_esc}'
+            f'@{WRDS_HOST}:{WRDS_PORT}/{WRDS_DB}'
+            f'?sslmode=require'
+        )
+        engine = sqlalchemy.create_engine(url, connect_args={'connect_timeout': 10})
+
+        # Quick probe to verify the credentials actually work
+        with engine.connect() as conn:
+            conn.execute(sqlalchemy.text('SELECT 1'))
+
+        return engine, None
+    except Exception as e:
+        return None, str(e)
+
+
+def run_sql(engine, query):
+    """Run a SQL query against the WRDS engine, return a DataFrame."""
+    with engine.connect() as conn:
+        return pd.read_sql(sqlalchemy.text(query), conn)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_financials(tickers_tuple, start_year, end_year, _engine):
+    """Fetch financial data from WRDS. Cached for 1 hour per ticker set.
+
+    Note: _engine is prefixed with underscore so Streamlit does not try to hash it.
+    tickers_tuple must be a tuple (not list) for hashing.
+    """
+    tickers = list(tickers_tuple)
+    tickers_str = "', '".join(tickers)
+
+    sql_query = f"""
+    SELECT tic, fyear, sale, at, lt, ceq, ni, act, lct
+    FROM comp.funda
+    WHERE tic IN ('{tickers_str}')
+      AND fyear BETWEEN {start_year} AND {end_year}
+      AND datafmt = 'STD'
+      AND consol = 'C'
+      AND indfmt = 'INDL'
+    """
+
+    data = run_sql(_engine, sql_query)
+    return data
+
+
+def clean_and_compute(data):
+    """Rename columns, exclude negative-equity rows, compute five ratios."""
     data = data.rename(columns={
         'tic': 'ticker',
         'fyear': 'year',
@@ -60,25 +110,24 @@ def load_data():
         'lct': 'current_liabilities'
     })
 
-    # Exclude rows with non-positive equity
+    # Exclude negative equity rows and track what was excluded
+    excluded = data[data['equity'] <= 0][['ticker', 'year', 'equity']].copy()
     data = data[data['equity'] > 0].copy()
 
-    # Compute the five ratios
+    # Compute ratios
     data['roe'] = data['net_income'] / data['equity']
     data['profit_margin'] = data['net_income'] / data['revenue']
     data['asset_turnover'] = data['revenue'] / data['total_assets']
     data['equity_multiplier'] = data['total_assets'] / data['equity']
     data['current_ratio'] = data['current_assets'] / data['current_liabilities']
 
-    return data
+    return data, excluded
 
 
+# ==========================================================================
+# Analysis functions (same as notebook)
+# ==========================================================================
 def identify_dominant_factor(dupont_table, ticker, threshold=0.85):
-    """Return a DuPont characteristic type for the given ticker.
-
-    A factor counts as "dominant" only if its normalized value >= threshold.
-    If no factor clears the threshold, the company is tagged 'Balanced'.
-    """
     pm_norm = dupont_table['profit_margin']     / dupont_table['profit_margin'].max()
     at_norm = dupont_table['asset_turnover']    / dupont_table['asset_turnover'].max()
     em_norm = dupont_table['equity_multiplier'] / dupont_table['equity_multiplier'].max()
@@ -105,8 +154,6 @@ def identify_dominant_factor(dupont_table, ticker, threshold=0.85):
 
 
 def generate_insights(dupont_table):
-    """Given a DuPont table, produce an English business commentary
-    as a Markdown string."""
     tickers = dupont_table.index.tolist()
     lines = []
 
@@ -145,7 +192,6 @@ def generate_insights(dupont_table):
 
     lines.append('')
 
-    # Flag pairs with similar ROE but different drivers
     roe_values = dupont_table['roe']
     similar_pairs = []
     for i, t1 in enumerate(tickers):
@@ -171,10 +217,8 @@ def generate_insights(dupont_table):
 
 
 def plot_three_factors(dupont_avg, companies, colors):
-    """Bar chart comparing the three DuPont factors across companies."""
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-    # Profit margin
     values_pm = (dupont_avg['profit_margin'] * 100).values
     bars1 = axes[0].bar(companies, values_pm, color=colors, width=0.6)
     axes[0].set_title('Profit Margin (%)', fontsize=12)
@@ -183,7 +227,6 @@ def plot_three_factors(dupont_avg, companies, colors):
         axes[0].text(bar.get_x() + bar.get_width()/2, val + 0.1,
                      f'{val:.1f}%', ha='center', fontsize=10, fontweight='bold')
 
-    # Asset turnover
     values_at = dupont_avg['asset_turnover'].values
     bars2 = axes[1].bar(companies, values_at, color=colors, width=0.6)
     axes[1].set_title('Asset Turnover (x)', fontsize=12)
@@ -192,7 +235,6 @@ def plot_three_factors(dupont_avg, companies, colors):
         axes[1].text(bar.get_x() + bar.get_width()/2, val + 0.05,
                      f'{val:.2f}', ha='center', fontsize=10, fontweight='bold')
 
-    # Equity multiplier
     values_em = dupont_avg['equity_multiplier'].values
     bars3 = axes[2].bar(companies, values_em, color=colors, width=0.6)
     axes[2].set_title('Equity Multiplier (x)', fontsize=12)
@@ -206,7 +248,6 @@ def plot_three_factors(dupont_avg, companies, colors):
 
 
 def plot_radar(dupont_avg, companies, colors):
-    """Radar (spider) charts, one per company, showing business-model 'fingerprints'."""
     pm_norm = dupont_avg['profit_margin']     / dupont_avg['profit_margin'].max()
     at_norm = dupont_avg['asset_turnover']    / dupont_avg['asset_turnover'].max()
     em_norm = dupont_avg['equity_multiplier'] / dupont_avg['equity_multiplier'].max()
@@ -220,7 +261,6 @@ def plot_radar(dupont_avg, companies, colors):
     fig, axes = plt.subplots(1, n_companies, figsize=(4 * n_companies, 4),
                               subplot_kw=dict(projection='polar'))
 
-    # If only one company, axes is not iterable
     if n_companies == 1:
         axes = [axes]
 
@@ -245,92 +285,172 @@ def plot_radar(dupont_avg, companies, colors):
 
 
 # ==========================================================================
-# Main UI
+# UI: Login gate
 # ==========================================================================
 st.title('📊 The Story Behind ROE')
 st.caption('A DuPont decomposition tool on WRDS data · ACC102 Mini Assignment')
 
-# Load data
-try:
-    data = load_data()
-except FileNotFoundError:
-    st.error('❌ company_financials.csv not found. Please run the notebook first to generate the data file.')
+if 'engine' not in st.session_state:
+    st.session_state.engine = None
+
+if st.session_state.engine is None:
+    st.markdown('### WRDS Login')
+    st.info(
+        'This tool queries Compustat data in real time via WRDS. '
+        'Please enter your own WRDS credentials. '
+        'Your password is used only for this session and is never stored.'
+    )
+
+    with st.form('login_form'):
+        wrds_user = st.text_input('WRDS username')
+        wrds_pass = st.text_input('WRDS password', type='password')
+        login_btn = st.form_submit_button('Log in')
+
+    if login_btn:
+        if not wrds_user or not wrds_pass:
+            st.error('Please enter both username and password.')
+        else:
+            with st.spinner('Connecting to WRDS...'):
+                engine, err = connect_wrds(wrds_user, wrds_pass)
+            if err:
+                st.error(f'Login failed: {err}')
+            else:
+                st.session_state.engine = engine
+                st.success('Connected. Redirecting...')
+                st.rerun()
+
     st.stop()
 
-# --- Sidebar: user controls ---
+
+# ==========================================================================
+# UI: Main analysis interface
+# ==========================================================================
+engine = st.session_state.engine
+
+with st.sidebar:
+    st.markdown('### Session')
+    if st.button('Log out'):
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+        st.session_state.engine = None
+        st.rerun()
+    st.markdown('---')
+
 st.sidebar.header('Analysis Parameters')
 
-selected_tickers = st.sidebar.multiselect(
-    'Select companies to compare (2–4)',
-    options=list(COMPANY_POOL.keys()),
-    default=['WMT', 'COST', 'TGT'],
-    format_func=lambda x: f'{x} — {COMPANY_POOL[x]}'
+ticker_input = st.sidebar.text_area(
+    'Enter 2–4 U.S. ticker symbols (comma- or space-separated)',
+    value='WMT, COST, TGT',
+    height=80,
+    help='Example: AAPL, MSFT, GOOGL. Use ticker symbols as they appear in Compustat.'
 )
 
 year_range = st.sidebar.slider(
     'Fiscal year range',
-    min_value=int(data['year'].min()),
-    max_value=int(data['year'].max()),
-    value=(int(data['year'].min()), int(data['year'].max()))
+    min_value=2010,
+    max_value=2024,
+    value=(2018, 2024)
 )
 
-# Input validation
-if len(selected_tickers) < 2:
-    st.warning('⚠️ Please select at least 2 companies to compare.')
+run_btn = st.sidebar.button('Analyze', type='primary')
+
+raw = ticker_input.replace(',', ' ').split()
+tickers = [t.strip().upper() for t in raw if t.strip()]
+
+if not run_btn:
+    st.markdown(
+        '### How to use\n'
+        '1. Enter 2–4 U.S. ticker symbols in the sidebar (e.g., `AAPL, MSFT, GOOGL`)\n'
+        '2. Pick a fiscal year range\n'
+        '3. Click **Analyze**\n\n'
+        'The tool will fetch the data live from WRDS, compute the DuPont decomposition, '
+        'and generate a side-by-side comparison plus automated commentary.'
+    )
     st.stop()
 
-if len(selected_tickers) > 4:
-    st.warning('⚠️ For chart clarity, please select at most 4 companies.')
-
-# --- Filter data ---
-filtered = data[
-    (data['ticker'].isin(selected_tickers)) &
-    (data['year'] >= year_range[0]) &
-    (data['year'] <= year_range[1])
-]
-
-if len(filtered) == 0:
-    st.error('No data available for the selected filters.')
+if len(tickers) < 2:
+    st.warning('Please enter at least 2 ticker symbols.')
     st.stop()
 
-# --- Compute per-company averages for DuPont ---
-dupont_avg = filtered.groupby('ticker').agg({
+if len(tickers) > 4:
+    st.warning('Please enter at most 4 ticker symbols for chart clarity.')
+    st.stop()
+
+with st.spinner(f'Fetching data for {", ".join(tickers)} from WRDS...'):
+    try:
+        raw_data = fetch_financials(tuple(tickers), year_range[0], year_range[1], engine)
+    except Exception as e:
+        st.error(f'WRDS query failed: {e}')
+        st.stop()
+
+if raw_data is None or len(raw_data) == 0:
+    st.error(
+        'No data returned. Check that your ticker symbols are valid Compustat tickers '
+        'and that data is available in the selected year range.'
+    )
+    st.stop()
+
+data, excluded = clean_and_compute(raw_data)
+
+available_tickers = set(data['ticker'].unique())
+missing = [t for t in tickers if t not in available_tickers]
+
+if missing:
+    st.warning(
+        f'No valid data found for: {", ".join(missing)}. '
+        f'These tickers may not be in Compustat or may have negative equity throughout the period.'
+    )
+
+if len(available_tickers) < 2:
+    st.error('Fewer than 2 companies have valid data. Cannot produce a comparison.')
+    st.stop()
+
+selected_tickers = [t for t in tickers if t in available_tickers]
+
+if len(excluded) > 0:
+    with st.expander(f'Note: {len(excluded)} rows excluded (negative equity)'):
+        st.caption(
+            'Rows with non-positive shareholders\' equity are excluded because '
+            'ROE becomes a meaningless negative number when equity is negative. '
+            'This is often due to large cumulative share buybacks (e.g., Home Depot).'
+        )
+        st.dataframe(excluded, use_container_width=True)
+
+dupont_avg = data[data['ticker'].isin(selected_tickers)].groupby('ticker').agg({
     'profit_margin': 'mean',
     'asset_turnover': 'mean',
     'equity_multiplier': 'mean',
     'roe': 'mean'
 }).reindex(selected_tickers)
 
-# Color palette
 color_palette = ['#FF6B35', '#004E89', '#E63946', '#2A9D8F',
                  '#F4A261', '#264653', '#A663CC', '#E9C46A',
                  '#E76F51', '#8338EC']
 colors = color_palette[:len(selected_tickers)]
 
-# --- Main content ---
 st.markdown(f'### Results: {year_range[0]} – {year_range[1]} average')
 
-# Three-factor bar chart
 st.markdown('#### DuPont Three-Factor Comparison')
 fig1 = plot_three_factors(dupont_avg, selected_tickers, colors)
 st.pyplot(fig1)
 
-# Radar chart
 st.markdown('#### Business Model "Fingerprints"')
 st.caption('Each factor is normalized to the group maximum; shape differences reflect business-model differences')
 fig2 = plot_radar(dupont_avg, selected_tickers, colors)
 st.pyplot(fig2)
 
-# Auto-generated insight
 st.markdown('#### Auto-Generated Business Commentary')
 insight = generate_insights(dupont_avg)
 st.markdown(insight)
 
-# Raw data (collapsible)
 with st.expander('Show raw data table'):
     st.dataframe(
-        filtered[['ticker', 'year', 'revenue', 'net_income',
-                  'equity', 'roe', 'profit_margin',
-                  'asset_turnover', 'equity_multiplier']].round(3),
+        data[data['ticker'].isin(selected_tickers)][
+            ['ticker', 'year', 'revenue', 'net_income',
+             'equity', 'roe', 'profit_margin',
+             'asset_turnover', 'equity_multiplier']
+        ].round(3),
         use_container_width=True
     )
