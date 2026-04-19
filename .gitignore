@@ -35,3 +35,5 @@ ENV/
 
 # === Streamlit ===
 .streamlit/secrets.toml
+
+company_financials.csv
