@@ -1,176 +1,176 @@
-# ROE 背后的故事 · 基于 WRDS 数据的杜邦分解对比工具
+# The Story Behind ROE · A DuPont Decomposition Tool on WRDS Data
 
-*ACC102 Mini Assignment · Track 4（Interactive Tool）*
-
----
-
-## 📌 产品演示
-
-- **Demo 视频**：_[录制后填入链接]_
-- **本地运行方式**：见本文档第 5 节"如何运行"
-- **注：** 由于 WRDS 数据有许可条款限制，原始数据未公开上传。评委可通过运行 `notebook.ipynb` 使用自己的 WRDS 账号拉取数据，然后启动本地 Streamlit app 体验完整功能
+*ACC102 Mini Assignment · Track 4 (Interactive Tool)*
 
 ---
 
-## 1. 问题与用户
+## 📌 Product Demo
 
-**目标用户**：正在学习财务比率分析的商科 / 会计本科生。
-
-**痛点**：课本教过 ROE = 净利率 × 周转率 × 权益乘数，但看到真实公司"ROE 25%"时没有直觉——这个数字算高吗？是经营效率好还是加了杠杆？课本例题都是虚构数字，和真实公司之间隔着一道"理解鸿沟"。
-
-**本工具的价值**：用户选 2–4 家公司，工具立即展示这些公司的杜邦三因子拆解对比，可视化 + 自然语言解读让用户"看懂" ROE 的来源。
+- **Demo video**: _[link will be added after recording]_
+- **Local run**: see Section 5 "How to Run" below
+- **Note:** WRDS data is subject to licensing restrictions and is not uploaded to this repository. The grader can reproduce the data by running `notebook.ipynb` with their own WRDS account, then launching the local Streamlit app for the full interactive experience.
 
 ---
 
-## 2. 数据
+## 1. Problem and User
 
-| 项 | 说明 |
+**Target user**: undergraduate business / accounting students learning financial ratio analysis.
+
+**Pain point**: textbooks teach ROE = Profit Margin × Asset Turnover × Equity Multiplier, but when students see a real company reporting "ROE 25%," they have no intuition — is that high? Is it driven by operational efficiency or by leverage? Textbook examples use stylized numbers, leaving a gap between theory and real companies.
+
+**What this tool does**: the user picks 2–4 companies, and the tool immediately shows a side-by-side DuPont decomposition. Visualizations plus natural-language commentary help the user *see through* the ROE number to understand where it comes from.
+
+---
+
+## 2. Data
+
+| Item | Description |
 |---|---|
-| **数据源** | WRDS · Compustat 数据库 · `comp.funda` 表 |
-| **覆盖公司** | 10 家美国上市公司（见第 3 节） |
-| **时间跨度** | 2018 – 2024（7 个财年，覆盖疫情前后） |
-| **关键字段** | `tic`、`fyear`、`sale`、`at`、`lt`、`ceq`、`ni`、`act`、`lct` |
-| **标准过滤器** | `datafmt='STD'` · `consol='C'` · `indfmt='INDL'`（遵循课程 W5 教学规范） |
+| **Source** | WRDS · Compustat database · `comp.funda` table |
+| **Coverage** | 10 U.S.-listed companies (see Section 3) |
+| **Time range** | 2018 – 2024 (7 fiscal years, covering pre- and post-pandemic) |
+| **Key fields** | `tic`, `fyear`, `sale`, `at`, `lt`, `ceq`, `ni`, `act`, `lct` |
+| **Standard filters** | `datafmt='STD'` · `consol='C'` · `indfmt='INDL'` (following W5 course guidance) |
 
-**数据清洗**：原始查询返回 70 行，排除 3 行股东权益为负的异常行（家得宝 2018/2019/2021），最终 67 行用于分析。负权益的原因在 notebook 中有详细讨论。
+**Cleaning**: the raw query returns 70 rows. We exclude 3 rows where shareholders' equity is negative (Home Depot 2018/2019/2021), yielding 67 rows for analysis. The reason for the negative equity is discussed in the notebook.
 
 ---
 
-## 3. 分析方法
+## 3. Analysis Method
 
-核心分析框架是**杜邦分解**（Dupont Analysis）——把 ROE 拆成三个有经营含义的因子：
+The core framework is the **DuPont decomposition** — breaking ROE into three factors each with a direct business meaning:
 
-> **ROE = 净利率 × 资产周转率 × 权益乘数**
+> **ROE = Profit Margin × Asset Turnover × Equity Multiplier**
 
-- **净利率**：卖东西赚不赚钱
-- **资产周转率**：资产转得快不快
-- **权益乘数**：用了多少杠杆
+- **Profit Margin**: how much of each dollar of sales becomes profit
+- **Asset Turnover**: how fast the assets generate revenue
+- **Equity Multiplier**: how much leverage is being used
 
-### 案例公司：美国零售三雄
+### Case study: the Big Three U.S. retailers
 
-深度分析聚焦三家同行业但战略差异明显的零售巨头：
+The deep analysis focuses on three retail giants in the same industry but with distinctly different strategies:
 
-| 股票代码 | 公司 | 商业模式定位 |
+| Ticker | Company | Business model positioning |
 |---|---|---|
-| WMT | Walmart（沃尔玛） | 规模型薄利多销 |
-| COST | Costco（好市多） | 会员制极致周转 |
-| TGT | Target（塔吉特） | 中端差异化溢价 |
+| WMT | Walmart | Scale-driven low margin |
+| COST | Costco | Membership-based extreme turnover |
+| TGT | Target | Mid-tier differentiated premium |
 
-Streamlit 交互工具额外预置了 7 家跨行业公司（Apple、Microsoft、Google、Home Depot、Coca-Cola、PepsiCo、Nike），供用户自由探索。
+The Streamlit tool additionally preloads 7 cross-industry companies (Apple, Microsoft, Google, Home Depot, Coca-Cola, PepsiCo, Nike) for free exploration.
 
 ---
 
-## 4. 主要发现
+## 4. Key Findings
 
-**发现 1：杜邦公式在真实数据上严格成立**
+**Finding 1: The DuPont formula holds exactly on real data**
 
-三因子乘积与直接计算的 ROE 之差在浮点精度量级（`10^-15`），公式成立无疑。
+The difference between the three-factor product and the directly-computed ROE is at floating-point precision (`10^-15`). The formula holds unambiguously.
 
-**发现 2：同样的 ROE，可能是完全不同的商业模式**
+**Finding 2: The same ROE can mean completely different business models**
 
-以 7 年平均值看，三家零售商的杜邦结构：
+Looking at 7-year averages for the three retailers:
 
-| 公司 | 净利率 | 周转率 | 权益乘数 | ROE |
+| Company | Profit Margin | Turnover | Equity Multiplier | ROE |
 |---|---|---|---|---|
 | WMT | 2.3% | 2.39 | 3.04 | **16.8%** |
 | COST | 2.5% | **3.40** | 3.06 | **26.2%** |
 | TGT | **4.2%** | 1.90 | **3.98** | **31.7%** |
 
-- **Costco = 效率型**：净利率和沃尔玛几乎一样低，但周转率高达 3.4 倍，是课堂上"高周转率商业模式"的教科书案例
-- **Target = 溢价型**：净利率 4.2%，三家里最高，靠门店体验和自有品牌赢得溢价；同时权益乘数最高（3.98），加了更多杠杆
-- **Walmart = 均衡型**：三个因子都不突出但也都不弱，作为全球最大零售商维持稳健 ROE
+- **Costco = Efficiency**: profit margin nearly identical to Walmart's, but turnover reaches 3.4x — a textbook case of the high-turnover business model
+- **Target = Premium**: profit margin 4.2% (highest of the three), earned through store experience and private-label brands; equity multiplier also highest (3.98), showing additional leverage
+- **Walmart = Balanced**: no factor is outstanding, but none is weak either — the world's largest retailer maintaining a stable ROE
 
-**发现 3：财务比率不能脱离业务背景解读**
+**Finding 3: Financial ratios cannot be read without business context**
 
-家得宝 2018/2019/2021 三年股东权益为负——不是经营不善，而是长期大规模股票回购的会计结果。WMT 2018 年 ROE 仅 9.2%，是税改 + Flipkart 收购两个一次性事件造成的。**这些案例提示：单一年度的财务比率必须结合业务背景判断，否则会得出误导性结论**。
+Home Depot had negative equity in 2018/2019/2021 — not because of operational troubles, but because of sustained massive share buybacks. Walmart's 2018 ROE of only 9.2% is explained by two one-time events (the TCJA tax reform and the Flipkart acquisition). **Single-year ratios can be badly distorted by one-time events; analysts must combine numbers with business context to avoid misleading conclusions.**
 
 ---
 
-## 5. 如何运行
+## 5. How to Run
 
-### 5.1 环境准备
+### 5.1 Environment setup
 
 ```bash
-# 克隆仓库
-git clone <本仓库地址>
+# Clone the repo
+git clone <repo URL>
 cd acc102-roe-decoded
 
-# 安装依赖
+# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 5.2 拉取 WRDS 数据（必需步骤）
+### 5.2 Pull WRDS data (required step)
 
-WRDS 数据因许可限制未包含在仓库中。首次运行需要使用自己的 WRDS 账号拉取：
+WRDS data is not included in the repo due to licensing. First-time users need to pull it using their own WRDS account:
 
-1. 打开 `notebook.ipynb`（Jupyter Lab 或 VS Code）
-2. 从头运行到 Cell 8（数据保存部分），输入自己的 WRDS 用户名和密码
-3. 运行完成后，项目根目录会出现 `company_financials.csv`
+1. Open `notebook.ipynb` (Jupyter Lab or VS Code)
+2. Run from the top through Cell 5 (the data-save step); enter your WRDS username and password when prompted
+3. After it finishes, `company_financials.csv` will appear in the project root
 
-### 5.3 运行方式
+### 5.3 Running the project
 
-**方式一：阅读完整分析叙事**
+**Option A: read the full analytical narrative**
 
 ```bash
 jupyter lab notebook.ipynb
 ```
 
-从头运行所有 cell，可以看到完整的 WRDS 查询 → 数据清洗 → 比率计算 → 杜邦分解 → 可视化 → 自动洞察的分析流程。
+Run all cells from top to bottom to see the full flow: WRDS query → cleaning → ratio computation → DuPont decomposition → visualizations → automatic insight generation.
 
-**方式二：启动交互式工具**
+**Option B: launch the interactive tool**
 
 ```bash
 streamlit run app.py
 ```
 
-浏览器会自动打开 `http://localhost:8501`，可以自由选择公司组合进行杜邦分析。
+The browser will open `http://localhost:8501`. You can freely pick any combination of companies for DuPont analysis.
 
 ---
 
-## 6. 项目结构
+## 6. Project Structure
 
 ```
 acc102-roe-decoded/
-├── README.md                    # 本文档
-├── requirements.txt             # Python 依赖清单
-├── .gitignore                   # 排除 WRDS 原始数据和系统文件
+├── README.md                    # This file
+├── requirements.txt             # Python dependencies
+├── .gitignore                   # Excludes WRDS data and system files
 │
-├── notebook.ipynb               # 核心分析叙事（主要提交物）
-├── app.py                       # Streamlit 交互工具
+├── notebook.ipynb               # Core analytical narrative (primary deliverable)
+├── app.py                       # Streamlit interactive tool
 │
-├── company_financials.csv       # WRDS 数据（本地存在，未上传）
+├── company_financials.csv       # WRDS data (kept locally, not uploaded)
 │
-└── reflection.md                # 500–800 字反思 + AI 使用披露
+└── reflection.md                # 500–800 word reflection + AI use disclosure
 ```
 
 ---
 
-## 7. 局限性与后续方向
+## 7. Limitations and Future Directions
 
-**分析层面**：
-- 仅使用年度数据，无法捕捉季度内波动和季节性
-- 杜邦分解只是一种视角，无法替代现金流分析、估值分析等其他维度
-- 案例集中在美国上市公司（可比口径），跨国会计准则差异未纳入考虑
+**Analytical**:
+- Annual data only, cannot capture within-year seasonality
+- DuPont decomposition is one perspective; it does not replace cash-flow analysis, valuation, etc.
+- Cases are all U.S.-listed companies (to keep accounting conventions comparable); cross-border GAAP/IFRS differences are not considered
 
-**工具层面**：
-- 规则模板生成的文字洞察覆盖面有限，遇到极端公司（如持续亏损、股东权益为负）会提示而非深度解读
-- 未加入行业中位数作为基准对比——未来可以加入"同行业其他公司分布"作为参照
+**Tool**:
+- The rule-based insight generator has limited coverage; extreme cases (persistent losses, negative equity) fall back to generic text rather than deep analysis
+- No industry-median benchmark — a future version could add peer-distribution context
 
-**工程层面**：
-- 本地部署限制了传播——未来如有脱敏版本数据，可部署到 Streamlit Community Cloud 供公开访问
-- 未加入单元测试——对一个小型作业项目合理，但规模扩大时应补充
-
----
-
-## 8. AI 使用声明
-
-本项目遵循课程 W6 所教授的"AI 辅助分析"工作流，使用 Claude（Anthropic）协作完成代码编写、可视化设计、文字解读生成等环节。所有 AI 生成的内容均经过作者理解并亲自验证，详细披露见 `reflection.md`。
+**Engineering**:
+- Local-only deployment limits reach; with a properly anonymized dataset the tool could be deployed to Streamlit Community Cloud for public access
+- No unit tests — acceptable for a small assignment, but would be needed at larger scale
 
 ---
 
-## 9. 致谢
+## 8. AI Use Declaration
 
-本项目在 ACC102 课程 W4–W6（WRDS 连接、SQL 查询、pandas 处理、AI 辅助分析、函数封装）的教学内容基础上完成。
+This project follows the "AI-assisted analysis" workflow introduced in course W6. Claude (Anthropic) was used for coding collaboration, visualization design, and insight template drafting. All AI-generated content has been read, understood, and verified by the author. Detailed disclosure is in `reflection.md`.
+
+---
+
+## 9. Acknowledgments
+
+This project builds directly on the ACC102 course material from W4–W6: WRDS connections, SQL querying, pandas processing, AI-assisted analysis, and function encapsulation.
 
 ---
 
