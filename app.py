@@ -229,6 +229,9 @@ def generate_insights(dupont_table):
     return '\n'.join(lines)
 
 
+# ==========================================================================
+# Plotting functions
+# ==========================================================================
 def plot_three_factors(dupont_avg, companies, colors):
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
@@ -292,6 +295,191 @@ def plot_radar(dupont_avg, companies, colors):
         ax.grid(True, alpha=0.4)
         ax.set_title(ticker, fontsize=12, pad=15,
                      color=colors[i], fontweight='bold')
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_trajectories(data, companies, colors):
+    """Three-factor time trajectories: one subplot per factor, one line per company."""
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.2), sharex=True)
+
+    factor_specs = [
+        ('profit_margin', 'Profit Margin (%)', 100),
+        ('asset_turnover', 'Asset Turnover (x)', 1),
+        ('equity_multiplier', 'Equity Multiplier (x)', 1),
+    ]
+
+    color_map = dict(zip(companies, colors))
+
+    for ax, (col, title, multiplier) in zip(axes, factor_specs):
+        for ticker in companies:
+            company_data = data[data['ticker'] == ticker].sort_values('year')
+            if len(company_data) == 0:
+                continue
+            ax.plot(company_data['year'], company_data[col] * multiplier,
+                    marker='o', linewidth=2.2, markersize=7,
+                    label=ticker, color=color_map[ticker])
+        ax.set_title(title, fontsize=12, pad=10)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='best', fontsize=9)
+        ax.set_xlabel('Fiscal Year')
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_attribution(data, companies, colors):
+    """Year-over-year ROE change decomposed into PM / AT / EM contributions."""
+    color_map = dict(zip(companies, colors))
+
+    n = len(companies)
+    fig, axes = plt.subplots(1, n, figsize=(5 * n, 4.5), sharey=True)
+    if n == 1:
+        axes = [axes]
+
+    any_plotted = False
+
+    for ax, ticker in zip(axes, companies):
+        company_data = data[data['ticker'] == ticker].sort_values('year').reset_index(drop=True)
+
+        if len(company_data) < 2:
+            ax.text(0.5, 0.5, f'{ticker}\n(need \u22652 years)',
+                    ha='center', va='center', transform=ax.transAxes, fontsize=11)
+            ax.set_title(f'{ticker}', fontsize=12, pad=10,
+                         color=color_map[ticker], fontweight='bold')
+            ax.set_xticks([])
+            ax.set_yticks([])
+            continue
+
+        attribution_records = []
+        for i in range(1, len(company_data)):
+            prev = company_data.iloc[i-1]
+            curr = company_data.iloc[i]
+
+            delta_roe_pp = (curr['roe'] - prev['roe']) * 100
+
+            try:
+                d_ln_pm = np.log(curr['profit_margin'] / prev['profit_margin'])
+                d_ln_at = np.log(curr['asset_turnover'] / prev['asset_turnover'])
+                d_ln_em = np.log(curr['equity_multiplier'] / prev['equity_multiplier'])
+                d_ln_total = d_ln_pm + d_ln_at + d_ln_em
+
+                if abs(d_ln_total) > 1e-9 and np.isfinite(d_ln_total):
+                    pm_contrib = delta_roe_pp * (d_ln_pm / d_ln_total)
+                    at_contrib = delta_roe_pp * (d_ln_at / d_ln_total)
+                    em_contrib = delta_roe_pp * (d_ln_em / d_ln_total)
+                else:
+                    pm_contrib = at_contrib = em_contrib = 0
+            except (ZeroDivisionError, ValueError):
+                pm_contrib = at_contrib = em_contrib = 0
+
+            attribution_records.append({
+                'transition': f"{int(prev['year'])}\u2192{int(curr['year'])}",
+                'PM': pm_contrib,
+                'AT': at_contrib,
+                'EM': em_contrib,
+                'total': delta_roe_pp
+            })
+
+        attr_df = pd.DataFrame(attribution_records)
+        x_positions = np.arange(len(attr_df))
+        width = 0.6
+
+        pm_vals = attr_df['PM'].values
+        at_vals = attr_df['AT'].values
+        em_vals = attr_df['EM'].values
+
+        def stack_positive(vals):
+            return np.where(vals > 0, vals, 0)
+        def stack_negative(vals):
+            return np.where(vals < 0, vals, 0)
+
+        pm_pos, pm_neg = stack_positive(pm_vals), stack_negative(pm_vals)
+        at_pos, at_neg = stack_positive(at_vals), stack_negative(at_vals)
+        em_pos, em_neg = stack_positive(em_vals), stack_negative(em_vals)
+
+        ax.bar(x_positions, pm_pos, width, color='#F4A261', label='Profit Margin')
+        ax.bar(x_positions, at_pos, width, bottom=pm_pos, color='#2A9D8F', label='Asset Turnover')
+        ax.bar(x_positions, em_pos, width, bottom=pm_pos + at_pos, color='#264653', label='Equity Multiplier')
+
+        ax.bar(x_positions, pm_neg, width, color='#F4A261')
+        ax.bar(x_positions, at_neg, width, bottom=pm_neg, color='#2A9D8F')
+        ax.bar(x_positions, em_neg, width, bottom=pm_neg + at_neg, color='#264653')
+
+        ax.plot(x_positions, attr_df['total'], 'ko-', markersize=7, linewidth=1.5,
+                label='Total \u0394ROE', zorder=5)
+
+        ax.axhline(0, color='black', linewidth=0.8)
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(attr_df['transition'], rotation=45, fontsize=8)
+        ax.set_title(f'{ticker}', fontsize=12, pad=10,
+                     color=color_map[ticker], fontweight='bold')
+        ax.grid(True, alpha=0.3, axis='y')
+        any_plotted = True
+
+    if any_plotted:
+        axes[0].set_ylabel('ROE Change (percentage points)', fontsize=10)
+        axes[-1].legend(loc='upper right', fontsize=7.5, framealpha=0.9)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_volatility(data, companies, colors):
+    """Bar chart of ROE standard deviation per company."""
+    roe_stats = (
+        data[data['ticker'].isin(companies)]
+        .groupby('ticker')['roe']
+        .agg(['mean', 'std'])
+        .reindex(companies)
+    )
+    # Replace NaN std (single-year data) with 0 so the bar still plots
+    roe_stats['std'] = roe_stats['std'].fillna(0)
+    roe_stats['mean_pct'] = roe_stats['mean'] * 100
+    roe_stats['std_pct'] = roe_stats['std'] * 100
+
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    bars = ax.bar(roe_stats.index, roe_stats['std_pct'], color=colors, width=0.55)
+
+    for bar, val_std, val_mean in zip(bars, roe_stats['std_pct'], roe_stats['mean_pct']):
+        ax.text(bar.get_x() + bar.get_width()/2, val_std + 0.3,
+                f'\u03c3 = {val_std:.1f}%\n(mean {val_mean:.1f}%)',
+                ha='center', fontsize=10, fontweight='bold')
+
+    ax.set_title('ROE Volatility: Standard Deviation Across Selected Years',
+                 fontsize=12, pad=15)
+    ax.set_ylabel('ROE Standard Deviation (%)')
+    ax.grid(True, alpha=0.3, axis='y')
+    max_std = max(roe_stats['std_pct']) if len(roe_stats) > 0 else 1
+    ax.set_ylim(0, max(max_std * 1.4, 1))
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_current_ratio(data, companies, colors):
+    """Current ratio time series per company, with liquidity threshold at 1.0."""
+    color_map = dict(zip(companies, colors))
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+
+    for ticker in companies:
+        company_data = data[data['ticker'] == ticker].sort_values('year')
+        if len(company_data) == 0:
+            continue
+        ax.plot(company_data['year'], company_data['current_ratio'],
+                marker='o', linewidth=2.5, markersize=9,
+                label=ticker, color=color_map[ticker])
+
+    ax.axhline(y=1.0, color='gray', linestyle='--', linewidth=1.2, alpha=0.7,
+               label='Current Ratio = 1 (liquidity threshold)')
+
+    ax.set_title('Current Ratio: Short-Term Liquidity', fontsize=13, pad=15)
+    ax.set_xlabel('Fiscal Year', fontsize=11)
+    ax.set_ylabel('Current Ratio (x)', fontsize=11)
+    ax.legend(loc='best', fontsize=10)
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     return fig
@@ -392,8 +580,14 @@ if not run_btn:
         '1. Enter 2–4 U.S. ticker symbols in the sidebar (e.g., `AAPL, MSFT, GOOGL`)\n'
         '2. Pick a fiscal year range\n'
         '3. Click **Analyze**\n\n'
-        'The tool will fetch the data live from WRDS, compute the DuPont decomposition, '
-        'and generate a side-by-side comparison plus automated commentary.'
+        'The tool will fetch the data live from WRDS, compute a multi-dimensional DuPont analysis, '
+        'and generate six charts plus automated commentary:\n\n'
+        '- DuPont three-factor comparison\n'
+        '- Factor trajectories over time\n'
+        '- Year-over-year ROE attribution\n'
+        '- Business model fingerprints (radar)\n'
+        '- ROE volatility\n'
+        '- Short-term liquidity (current ratio)\n'
     )
     st.stop()
 
@@ -457,27 +651,64 @@ color_palette = ['#FF6B35', '#004E89', '#E63946', '#2A9D8F',
                  '#E76F51', '#8338EC']
 colors = color_palette[:len(selected_tickers)]
 
-st.markdown(f'### Results: {year_range[0]} – {year_range[1]} average')
+# Only keep rows that are for selected tickers (used by time-series plots)
+data_selected = data[data['ticker'].isin(selected_tickers)].copy()
 
-st.markdown('#### DuPont Three-Factor Comparison')
+st.markdown(f'### Results: {year_range[0]} – {year_range[1]}')
+
+# ----- Chart 1: Three-factor static comparison -----
+st.markdown('#### 1. DuPont Three-Factor Comparison')
+st.caption('Average values across the selected year range')
 fig1 = plot_three_factors(dupont_avg, selected_tickers, colors)
 st.pyplot(fig1)
 
-st.markdown('#### Business Model "Fingerprints"')
-st.caption('Each factor is normalized to the group maximum; shape differences reflect business-model differences')
-fig2 = plot_radar(dupont_avg, selected_tickers, colors)
+# ----- Chart 2: Three-factor trajectories over time -----
+st.markdown('#### 2. Factor Trajectories Over Time')
+st.caption('How each DuPont factor evolves year by year — reveals whether business models are stable or shifting')
+fig2 = plot_trajectories(data_selected, selected_tickers, colors)
 st.pyplot(fig2)
 
+# ----- Chart 3: Year-over-year ROE attribution -----
+st.markdown('#### 3. Year-over-Year ROE Attribution')
+st.caption(
+    'What drove each change in ROE? Log-difference decomposition attributes each year-to-year ROE change '
+    'to profit margin, asset turnover, and equity multiplier.'
+)
+fig3 = plot_attribution(data_selected, selected_tickers, colors)
+st.pyplot(fig3)
+
+# ----- Chart 4: Business-model fingerprints (radar) -----
+st.markdown('#### 4. Business Model "Fingerprints"')
+st.caption('Each factor is normalized to the group maximum; shape differences reflect business-model differences')
+fig4 = plot_radar(dupont_avg, selected_tickers, colors)
+st.pyplot(fig4)
+
+# ----- Chart 5: ROE volatility -----
+st.markdown('#### 5. ROE Volatility')
+st.caption('Standard deviation of ROE across the selected years — low volatility = steady compounding')
+fig5 = plot_volatility(data_selected, selected_tickers, colors)
+st.pyplot(fig5)
+
+# ----- Chart 6: Current ratio -----
+st.markdown('#### 6. Short-Term Liquidity (Current Ratio)')
+st.caption(
+    'Current ratio = current assets ÷ current liabilities. '
+    'Retailers often run below 1.0 by design (fast cash collection, slow supplier payments).'
+)
+fig6 = plot_current_ratio(data_selected, selected_tickers, colors)
+st.pyplot(fig6)
+
+# ----- Commentary -----
 st.markdown('#### Auto-Generated Business Commentary')
 insight = generate_insights(dupont_avg)
 st.markdown(insight)
 
 with st.expander('Show raw data table'):
     st.dataframe(
-        data[data['ticker'].isin(selected_tickers)][
+        data_selected[
             ['ticker', 'year', 'revenue', 'net_income',
              'equity', 'roe', 'profit_margin',
-             'asset_turnover', 'equity_multiplier']
+             'asset_turnover', 'equity_multiplier', 'current_ratio']
         ].round(3),
         use_container_width=True
     )
